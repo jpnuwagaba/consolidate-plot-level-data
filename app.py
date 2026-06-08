@@ -1,54 +1,113 @@
 import streamlit as st
 import pandas as pd
-import os
+
+SOURCE_FILE_COLUMN = "source_file"
+DUPLICATE_KEY_FIELDS = ["sucafina_plot_id", "plot_wkt"]
+TRUE_CERTIFICATION_VALUES = {"true", "t", "yes", "y", "1", "1.0"}
+FALSE_CERTIFICATION_VALUES = {"false", "f", "no", "n", "0", "0.0"}
+
+def get_duplicate_key_fields(df):
+    """Get the fields used to identify duplicate farm plots."""
+    missing_fields = [field for field in DUPLICATE_KEY_FIELDS if field not in df.columns]
+    if missing_fields:
+        missing_fields_text = ", ".join(missing_fields)
+        raise ValueError(f"Missing duplicate key field(s): {missing_fields_text}")
+    return DUPLICATE_KEY_FIELDS
 
 def count_duplicates(df):
     """Count the number of duplicate rows in the dataframe."""
-    return df.duplicated().sum()
+    return df.duplicated(subset=get_duplicate_key_fields(df)).sum()
 
 def get_duplicates_df(df):
     """Get all duplicate rows from the dataframe."""
-    return df[df.duplicated(keep=False)].sort_values(by=list(df.columns)).reset_index(drop=True)
+    return df[df.duplicated(subset=get_duplicate_key_fields(df), keep=False)].sort_values(by=list(df.columns)).reset_index(drop=True)
+
+def get_existing_certification_fields(df):
+    """Get certification field names that exist in the dataframe."""
+    return [field for field in get_certification_fields() if field in df.columns]
+
+def get_boolean_certification_fields(df):
+    """Get certification fields that store true/false values."""
+    return [field for field in get_existing_certification_fields(df) if field.startswith("is_")]
+
+def get_missing_certifications_mask(df):
+    """Identify records where all certification fields are empty."""
+    existing_cert_fields = get_existing_certification_fields(df)
+    if not existing_cert_fields:
+        return pd.Series(False, index=df.index)
+    certification_values = df[existing_cert_fields].replace(r"^\s*$", pd.NA, regex=True)
+    return certification_values.isna().all(axis=1)
+
+def normalize_certification_value(value):
+    """Normalize common true/false certification values."""
+    if pd.isna(value):
+        return None
+    if isinstance(value, bool):
+        return value
+    value_text = str(value).strip().lower()
+    if value_text in TRUE_CERTIFICATION_VALUES:
+        return True
+    if value_text in FALSE_CERTIFICATION_VALUES:
+        return False
+    return None
+
+def has_true_and_false_certifications(row, certification_fields):
+    """Check whether a record has at least one true and one false certification value."""
+    normalized_values = {
+        normalize_certification_value(row[field])
+        for field in certification_fields
+    }
+    return True in normalized_values and False in normalized_values
+
+def trim_consolidated_dataframe(df):
+    """
+    Remove missing-certification records and resolve duplicate farm plots.
+    Duplicate farm plots are identified by sucafina_plot_id and plot_wkt.
+    """
+    key_fields = get_duplicate_key_fields(df)
+    trimmed_df = df.loc[~get_missing_certifications_mask(df)].copy()
+    if trimmed_df.empty:
+        return trimmed_df.reset_index(drop=True)
+
+    boolean_cert_fields = get_boolean_certification_fields(trimmed_df)
+    if not boolean_cert_fields:
+        return trimmed_df.drop_duplicates(subset=key_fields, keep="first").reset_index(drop=True)
+    cert_profile_fields = get_existing_certification_fields(trimmed_df)
+
+    mixed_cert_mask = trimmed_df.apply(
+        lambda row: has_true_and_false_certifications(row, boolean_cert_fields),
+        axis=1
+    )
+    working_df = trimmed_df.assign(_has_true_and_false_certifications=mixed_cert_mask)
+    retained_groups = []
+
+    for _, group_df in working_df.groupby(key_fields, dropna=False, sort=False):
+        if len(group_df) == 1:
+            retained_groups.append(group_df)
+            continue
+
+        preferred_group_df = group_df[group_df["_has_true_and_false_certifications"]]
+        if preferred_group_df.empty:
+            retained_groups.append(group_df.head(1))
+        else:
+            retained_groups.append(preferred_group_df.drop_duplicates(subset=cert_profile_fields, keep="first"))
+
+    return (
+        pd.concat(retained_groups, ignore_index=True)
+        .drop(columns=["_has_true_and_false_certifications"])
+        .reset_index(drop=True)
+    )
 
 def count_missing_certifications(df):
     """
     Count records that lack certification information.
     A record is considered to lack certification if ALL certification fields are NULL.
     """
-    certification_fields = [
-        'is_cafe_practices_certified',
-        'is_rfa_utz_certified',
-        'is_impact_certified',
-        'is_organic_certified',
-        'is_4c_certified',
-        'is_fairtrade_certified',
-        'other_certification_name'
-    ]
-    
-    # Filter only the certification fields that exist in the dataframe
-    existing_cert_fields = [field for field in certification_fields if field in df.columns]
-    
-    # Count rows where ALL certification fields are NULL/NaN
-    missing_cert_mask = df[existing_cert_fields].isna().all(axis=1)
-    return missing_cert_mask.sum()
+    return get_missing_certifications_mask(df).sum()
 
 def get_missing_certifications_df(df):
     """Get all records that lack certification information."""
-    certification_fields = [
-        'is_cafe_practices_certified',
-        'is_rfa_utz_certified',
-        'is_impact_certified',
-        'is_organic_certified',
-        'is_4c_certified',
-        'is_fairtrade_certified',
-        'other_certification_name'
-    ]
-    
-    # Filter only the certification fields that exist in the dataframe
-    existing_cert_fields = [field for field in certification_fields if field in df.columns]
-    
-    # Get rows where ALL certification fields are NULL/NaN
-    missing_cert_mask = df[existing_cert_fields].isna().all(axis=1)
+    missing_cert_mask = get_missing_certifications_mask(df)
     return df[missing_cert_mask].reset_index(drop=True)
 
 def get_certification_fields():
@@ -65,20 +124,19 @@ def get_certification_fields():
 
 def extract_data_by_filter(df, filter_type):
     """Extract data from dataframe based on filter selection."""
-    certification_fields = get_certification_fields()
-    existing_cert_fields = [field for field in certification_fields if field in df.columns]
+    existing_cert_fields = get_existing_certification_fields(df)
+    id_cols = ["sucafina_plot_id"] if "sucafina_plot_id" in df.columns else []
     
     if filter_type == "Certification Details":
-        # Return only certification-related columns plus ID columns (excluding cert name field duplication)
-        id_cols = [col for col in df.columns if 'id' in col.lower()]
+        # Return only the plot ID plus certification-related columns
         # Combine and remove duplicates while preserving order
         columns_to_select = list(dict.fromkeys(id_cols + existing_cert_fields))
         return df[columns_to_select].reset_index(drop=True)
     else:
-        # For other filters, return rows grouped by that field with relevant details
+        # For other filters, return only the plot ID plus the selected field
         if filter_type in df.columns:
-            # Get all columns for better context
-            return df[[col for col in df.columns if col != filter_type] + [filter_type]].reset_index(drop=True)
+            columns_to_select = list(dict.fromkeys(id_cols + [filter_type]))
+            return df[columns_to_select].reset_index(drop=True)
         return df
 
 @st.dialog("Duplicate Records", width="large")
@@ -113,7 +171,7 @@ def show_missing_certifications_modal(missing_cert_df):
 
 st.set_page_config(
     page_title="Consolidate farm plot data",
-    page_icon="🌾",
+    page_icon="🗺️",
     layout="wide",
     initial_sidebar_state="auto",
 )
@@ -147,20 +205,27 @@ if uploaded_csv_files:
         dfs_list = []
         for uploaded_file in uploaded_csv_files:
             df = pd.read_csv(uploaded_file)
+            df[SOURCE_FILE_COLUMN] = uploaded_file.name
             dfs_list.append(df)
         
-        consolidated_df = pd.concat(dfs_list, ignore_index=True)
+        raw_consolidated_df = pd.concat(dfs_list, ignore_index=True)
+        consolidated_df = trim_consolidated_dataframe(raw_consolidated_df)
         
         # Calculate statistics
         num_files = len(uploaded_csv_files)
-        num_rows = consolidated_df.shape[0]
-        num_columns = consolidated_df.shape[1]
-        num_duplicates = count_duplicates(consolidated_df)
-        num_missing_certifications = count_missing_certifications(consolidated_df)
+        raw_num_rows = raw_consolidated_df.shape[0]
+        raw_num_columns = raw_consolidated_df.shape[1]
+        num_rows = raw_num_rows
+        num_columns = raw_num_columns
+        trimmed_num_rows = consolidated_df.shape[0]
+        trimmed_num_columns = consolidated_df.shape[1]
+        num_duplicates = count_duplicates(raw_consolidated_df)
+        num_missing_certifications = count_missing_certifications(raw_consolidated_df)
+        num_removed_records = raw_num_rows - trimmed_num_rows
         
         # Display enhanced success message
         st.success("✓ Successfully consolidated farm plot data")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("Files Read", num_files)
         with col2:
@@ -170,7 +235,7 @@ if uploaded_csv_files:
             if st.button("Preview", key="btn_duplicates"):
                 st.session_state.show_duplicates_modal = True
             if st.session_state.show_duplicates_modal:
-                duplicates_df = get_duplicates_df(consolidated_df)
+                duplicates_df = get_duplicates_df(raw_consolidated_df)
                 show_duplicates_modal(duplicates_df)
                 st.session_state.show_duplicates_modal = False
         with col4:
@@ -178,15 +243,17 @@ if uploaded_csv_files:
             if st.button("Preview", key="btn_missing_certs"):
                 st.session_state.show_missing_certs_modal = True
             if st.session_state.show_missing_certs_modal:
-                missing_cert_df = get_missing_certifications_df(consolidated_df)
+                missing_cert_df = get_missing_certifications_df(raw_consolidated_df)
                 show_missing_certifications_modal(missing_cert_df)
                 st.session_state.show_missing_certs_modal = False
+        with col5:
+            st.metric("Trimmed Shape", f"{trimmed_num_rows:,} rows x {trimmed_num_columns} cols", delta=f"-{num_removed_records:,} rows")
         
         # Display the first few rows
-        st.subheader("Consolidated Data Preview")
+        st.subheader("Consolidated Data Preview (free of duplicates and missing certifications)")
         st.dataframe(consolidated_df, height=200)
         
-        st.write("Data consolidation complete. Now, please upload the Meridia file for comparison.")
+        st.write("Data consolidation and trimming complete. Now, please upload the Meridia file for comparison.")
         
         # Set session state to show file uploader
         st.session_state.data_loaded = True
@@ -216,8 +283,7 @@ if st.session_state.data_loaded:
                 st.write(f"Meridia shape: {meridia_df.shape[0]:,} rows × {meridia_df.shape[1]} columns")
                 
                 # Extract dynamic filter options from consolidated data
-                cert_fields = get_certification_fields()
-                existing_cert_fields = [field for field in cert_fields if field in consolidated_df.columns]
+                existing_cert_fields = get_existing_certification_fields(consolidated_df)
                 
                 # Build filter options: Certification Details first, then other fields
                 filter_options = ["Certification Details"]
