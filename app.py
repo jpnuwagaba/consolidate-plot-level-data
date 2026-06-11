@@ -122,22 +122,44 @@ def get_certification_fields():
         'other_certification_name'
     ]
 
-def extract_data_by_filter(df, filter_type):
-    """Extract data from dataframe based on filter selection."""
-    existing_cert_fields = get_existing_certification_fields(df)
-    id_cols = ["sucafina_plot_id"] if "sucafina_plot_id" in df.columns else []
-    
+def extract_data_by_filter(
+    consolidated_df,
+    meridia_df,
+    filter_type,
+    consolidated_match_col,
+    meridia_match_col
+):
+    existing_cert_fields = get_existing_certification_fields(consolidated_df)
+
+    matched_df = consolidated_df.merge(
+        meridia_df[[meridia_match_col]].drop_duplicates(),
+        left_on=consolidated_match_col,
+        right_on=meridia_match_col,
+        how="inner"
+    )
+
     if filter_type == "Certification Details":
-        # Return only the plot ID plus certification-related columns
-        # Combine and remove duplicates while preserving order
-        columns_to_select = list(dict.fromkeys(id_cols + existing_cert_fields))
-        return df[columns_to_select].reset_index(drop=True)
-    else:
-        # For other filters, return only the plot ID plus the selected field
-        if filter_type in df.columns:
-            columns_to_select = list(dict.fromkeys(id_cols + [filter_type]))
-            return df[columns_to_select].reset_index(drop=True)
-        return df
+
+        columns_to_select = list(
+            dict.fromkeys(
+                [consolidated_match_col]
+                + existing_cert_fields
+            )
+        )
+
+        return matched_df[columns_to_select].reset_index(drop=True)
+
+    if filter_type in matched_df.columns:
+
+        columns_to_select = list(
+            dict.fromkeys(
+                [consolidated_match_col, filter_type]
+            )
+        )
+
+        return matched_df[columns_to_select].reset_index(drop=True)
+
+    return matched_df[[consolidated_match_col]].reset_index(drop=True)
 
 @st.dialog("Duplicate Records", width="large")
 def show_duplicates_modal(duplicates_df):
@@ -279,8 +301,29 @@ if st.session_state.data_loaded:
                     meridia_df = pd.read_csv(uploaded_file)
                 else:
                     meridia_df = pd.read_excel(uploaded_file)
+
+                # remove duplicates from meridia file based on the field called "farm_plot_id" if it exists, otherwise keep as is
+                # do so based on the field "dataset_name" where the first value in descending order is kept, and the rest are removed as duplicates
+                if "farm_plot_id" in meridia_df.columns and "dataset_name" in meridia_df.columns:
+                    meridia_df = meridia_df.sort_values(by="dataset_name", ascending=False).drop_duplicates(subset=["farm_plot_id"], keep="first").reset_index(drop=True)
+                
                 st.success("✓ Meridia file uploaded successfully.")
                 st.write(f"Meridia shape: {meridia_df.shape[0]:,} rows × {meridia_df.shape[1]} columns")
+
+                st.write("### Matching Configuration")
+
+                match_col_consolidated = st.selectbox(
+                    "Consolidated ID Column",
+                    consolidated_df.columns,
+                    index=consolidated_df.columns.get_loc("sucafina_plot_id")
+                    if "sucafina_plot_id" in consolidated_df.columns
+                    else 0
+                )
+
+                match_col_meridia = st.selectbox(
+                    "Meridia ID Column",
+                    meridia_df.columns
+                )
                 
                 # Extract dynamic filter options from consolidated data
                 existing_cert_fields = get_existing_certification_fields(consolidated_df)
@@ -305,7 +348,13 @@ if st.session_state.data_loaded:
                     st.session_state.extracted_data = None
                 
                 # Extract data based on filter
-                st.session_state.extracted_data = extract_data_by_filter(consolidated_df, selected_filter)
+                st.session_state.extracted_data = extract_data_by_filter(
+                    consolidated_df=consolidated_df,
+                    meridia_df=meridia_df,
+                    filter_type=selected_filter,
+                    consolidated_match_col=match_col_consolidated,
+                    meridia_match_col=match_col_meridia
+                )
                 
                 st.write(f"**Extracted Data Shape:** {st.session_state.extracted_data.shape[0]:,} rows × {st.session_state.extracted_data.shape[1]} columns")
                 
@@ -327,3 +376,40 @@ if st.session_state.data_loaded:
             st.dataframe(st.session_state.extracted_data, height=500, use_container_width=True)
         else:
             st.write("Upload a Meridia file and select a filter to preview extracted data here.")
+
+# Match statistics
+if (
+    'data_loaded' in st.session_state
+    and st.session_state.data_loaded
+    and 'consolidated_df' in locals()
+    and 'meridia_df' in locals()
+    and 'match_col_consolidated' in locals()
+    and 'match_col_meridia' in locals()
+):
+
+    matching_ids = (
+        set(consolidated_df[match_col_consolidated].dropna())
+        & set(meridia_df[match_col_meridia].dropna())
+    )
+
+    st.write("### Match Statistics")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Consolidated Records",
+            f"{len(consolidated_df):,}"
+        )
+
+    with col2:
+        st.metric(
+            "Meridia Records",
+            f"{len(meridia_df):,}"
+        )
+
+    with col3:
+        st.metric(
+            "Matching IDs",
+            f"{len(matching_ids):,}"
+        )
