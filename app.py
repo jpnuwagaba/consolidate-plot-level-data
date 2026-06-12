@@ -187,7 +187,7 @@ def show_missing_certifications_modal(missing_cert_df):
 
 st.set_page_config(
     page_title="Consolidate farm plot data",
-    page_icon="🗺️",
+    page_icon="🤗",
     layout="wide",
     initial_sidebar_state="auto",
 )
@@ -202,7 +202,7 @@ if 'show_missing_certs_modal' not in st.session_state:
 if 'extracted_data' not in st.session_state:
     st.session_state.extracted_data = None
 
-st.title("Consolidate farm plot data")
+st.title("Consolidate farm plot data 🤗")
 st.write("This tool will help you upload farm plot data CSV files and consolidate them into a single dataframe. You will then upload a file downloaded Meridia containing the same scope (country-level) of data, and the tool will compare the two datasets and facilitate extraction of key information at farm plot level like certification details.")
 
 # File uploader for CSV files
@@ -403,7 +403,7 @@ if st.session_state.data_loaded:
                 st.error(f"Error reading the Meridia file: {str(e)}")
     
     with col2:
-        st.write("**Preview**")
+        st.write("**Preview with Match Statistics**")
 
         if (
             'extracted_data' in st.session_state and 
@@ -414,8 +414,6 @@ if st.session_state.data_loaded:
                 set(consolidated_df[match_col_consolidated].dropna()) &
                 set(meridia_df[match_col_meridia].dropna())
             )
-
-            st.write("### Match Statistics")
 
             col_a, col_b, col_c = st.columns(3)
 
@@ -437,10 +435,24 @@ if st.session_state.data_loaded:
 
             # ✅ Download button BELOW table
             csv = st.session_state.extracted_data.to_csv(index=False)
+
+            # ✅ Build filename safely from selected filters
+            if selected_filters:
+                if len(selected_filters) > 3:
+                    # ✅ UX: shorten long filenames
+                    filter_name = "multiple_filters"
+                else:
+                    filter_name = "_".join(
+                        [f.lower().replace(" ", "_") for f in selected_filters]
+                    )
+            else:
+                # ✅ Safety fallback
+                filter_name = "no_filter"
+
             st.download_button(
-                label="📥 Download Extracted Data",
+                label="Download Extracted Data",
                 data=csv,
-                file_name=f"extracted_{selected_filter.lower().replace(' ', '_')}.csv",
+                file_name=f"extracted_{filter_name}.csv",
                 mime="text/csv"
             )
 
