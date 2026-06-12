@@ -1,4 +1,5 @@
 import streamlit as st
+import re
 import pandas as pd
 
 SOURCE_FILE_COLUMN = "source_file"
@@ -434,26 +435,121 @@ if st.session_state.data_loaded:
             )
 
             # ✅ Download button BELOW table
-            csv = st.session_state.extracted_data.to_csv(index=False)
+            
+            import zipfile
+            import io
 
-            # ✅ Build filename safely from selected filters
-            if selected_filters:
-                if len(selected_filters) > 3:
-                    # ✅ UX: shorten long filenames
-                    filter_name = "multiple_filters"
-                else:
-                    filter_name = "_".join(
-                        [f.lower().replace(" ", "_") for f in selected_filters]
-                    )
+            # ✅ Scope input
+            scope_name = st.text_input(
+                label="",
+                placeholder="Specify scope e.g., Costa Rica or TPJC"
+            )
+
+            scope_clean = scope_name.strip() if scope_name else ""
+            is_valid_scope = bool(scope_clean)
+
+            safe_scope = scope_clean.lower().replace(" ", "_")
+
+            df = st.session_state.extracted_data
+
+            # ✅ Always prepare main CSV
+            main_csv = df.to_csv(index=False)
+
+            # ✅ Check if Certification Details is selected
+            is_cert_filter = (
+                selected_filters == ["Certification Details"] or
+                (len(selected_filters) == 1 and selected_filters[0] == "Certification Details")
+            )
+
+            # ✅ Get certification fields
+            cert_fields = get_boolean_certification_fields(df)
+
+            if is_cert_filter and cert_fields:
+
+                def classify_row(row):
+                    values = [normalize_certification_value(row[f]) for f in cert_fields]
+
+                    has_true = True in values
+                    has_false = False in values
+                    has_any = any(v is not None for v in values)
+
+                    if has_true:
+                        return "certified"
+                    elif has_any and not has_true:
+                        return "non_certified"
+                    else:
+                        return "missing"
+
+                df["__cert_status"] = df.apply(classify_row, axis=1)
+
+                certified_df = df[df["__cert_status"] == "certified"]
+                non_certified_df = df[df["__cert_status"] == "non_certified"]
+                missing_df = df[df["__cert_status"] == "missing"]
+
+                # ✅ Counts
+                total = len(df)
+                certified_count = len(certified_df)
+                non_certified_count = len(non_certified_df)
+                missing_count = len(missing_df)
+
+                # ✅ Create ZIP in memory
+                zip_buffer = io.BytesIO()
+
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+
+                    # ✅ Always include extracted data
+                    zf.writestr(f"{scope_clean}.csv", main_csv)
+
+                    # ✅ Conditional exports (skip empty)
+                    if certified_count > 0:
+                        zf.writestr(
+                            "Certified Farm Plots.csv",
+                            certified_df.drop(columns="__cert_status").to_csv(index=False)
+                        )
+
+                    if non_certified_count > 0:
+                        zf.writestr(
+                            "Non-certified Farm Plots.csv",
+                            non_certified_df.drop(columns="__cert_status").to_csv(index=False)
+                        )
+
+                    if missing_count > 0:
+                        zf.writestr(
+                            "Missing Certification Information.csv",
+                            missing_df.drop(columns="__cert_status").to_csv(index=False)
+                        )
+
+                    # ✅ TXT REPORT (always included)
+                    report = f"""{scope_clean}
+            Farm Plots = {total}
+            Certified Farm Plots = {certified_count}
+            Non-certified Farm Plots = {non_certified_count}
+            Farm Plots missing Certification Information = {missing_count}
+            """
+
+                    zf.writestr(f"{scope_clean}.txt", report)
+
+                zip_buffer.seek(0)
+
+                # ✅ Download ZIP
+                st.download_button(
+                label="Download Certification Data (ZIP)",
+                data=zip_buffer,
+                file_name=f"{scope_clean}.zip" if is_valid_scope else "disabled.zip",
+                mime="application/zip",
+                disabled=not is_valid_scope
+            )
+
             else:
-                # ✅ Safety fallback
-                filter_name = "no_filter"
+                # ✅ Default CSV behavior (unchanged)
+                file_name = f"{safe_scope}.csv" if scope_name else "extracted_data.csv"
 
-            st.download_button(
+                st.download_button(
                 label="Download Extracted Data",
-                data=csv,
-                file_name=f"extracted_{filter_name}.csv",
-                mime="text/csv"
+                data=main_csv,
+                file_name=f"{scope_clean}.csv" if is_valid_scope else "disabled.csv",
+                mime="text/csv",
+                disabled=not is_valid_scope
             )
 
         else:
