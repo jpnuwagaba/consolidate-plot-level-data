@@ -464,6 +464,32 @@ if st.session_state.data_loaded:
             # ✅ Get certification fields
             cert_fields = get_boolean_certification_fields(df)
 
+            # ✅ Map fields to friendly names
+            cert_mapping = {
+                "is_cafe_practices_certified": "CP",
+                "is_rfa_utz_certified": "RF",
+                "is_organic_certified": "Organic",
+                "is_4c_certified": "4C",
+                "is_fairtrade_certified": "Fairtrade",
+                "is_impact_certified": "Impact"
+            }
+
+            # ✅ Count certified plots per certification
+            cert_summary = []
+
+            for field in cert_fields:
+                normalized = df[field].apply(normalize_certification_value)
+                count = (normalized == True).sum()
+
+                if count > 0:
+                    cert_summary.append({
+                        "Certification": cert_mapping.get(field, field),
+                        "Count": count
+                    })
+
+            # cert_summary_df = pd.DataFrame(cert_summary)
+
+
             if is_cert_filter and cert_fields:
 
                 def classify_row(row):
@@ -521,11 +547,28 @@ if st.session_state.data_loaded:
 
                     # ✅ TXT REPORT (always included)
                     report = f"""{scope_clean}
-            Farm Plots = {total}
-            Certified Farm Plots = {certified_count}
-            Non-certified Farm Plots = {non_certified_count}
-            Farm Plots missing Certification Information = {missing_count}
-            """
+                    Farm Plots = {total}
+                    Certified Farm Plots = {certified_count}
+                    Non-certified Farm Plots = {non_certified_count}
+                    Farm Plots missing Certification Information = {missing_count}
+                    """
+
+                    # ✅ Add certification breakdown section
+                    report += "\nCertifications List:\n"
+
+                    # ✅ Build alphabetical certification list
+                    if cert_summary:
+                        cert_names = sorted([item["Certification"] for item in cert_summary])
+                        report += ", ".join(cert_names) + "\n\n"
+
+                        # ✅ Breakdown counts
+                        # add a sub title for the breakdown section
+                        report += "Certifications Numbers:\n"
+                        for item in cert_summary:
+                            report += f"{item['Certification']} = {item['Count']}\n"
+                    else:
+                        report += "No certification data available\n"
+
 
                     zf.writestr(f"{scope_clean}.txt", report)
 
