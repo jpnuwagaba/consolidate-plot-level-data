@@ -137,7 +137,8 @@ def extract_data_by_filter(
     meridia_df,
     left_on=consolidated_match_col,
     right_on=meridia_match_col,
-    how="inner"
+    how="inner",
+    suffixes=('_consolidated', '_meridia')
 )
     # ✅ Prevent row explosion from duplicates
     matched_df = matched_df.drop_duplicates(subset=[consolidated_match_col]).reset_index(drop=True)
