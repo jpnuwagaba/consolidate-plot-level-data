@@ -116,7 +116,9 @@ def consolidate_raw_files(uploaded_csv_files):
 
 st.set_page_config(
     page_title="Sucafina - Generate DLUC Certification Data",
-    page_icon="📦",
+    # page_icon="📦",
+    # use svg in root folder for page_icon
+    page_icon="globe-svgfind-com.svg",
     layout="wide",
     initial_sidebar_state="auto",
 )
