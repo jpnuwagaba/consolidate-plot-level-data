@@ -1,0 +1,4 @@
+sucafina_plot_id,supplier_plot_id,farmer_id,plot_region,plot_district,plot_area_ha,plot_longitude,plot_latitude,plot_wkt,is_geodata_validated,is_cafe_practices_certified,is_rfa_utz_certified,is_impact_certified,is_organic_certified,is_fairtrade_certified,other_certification_name,plot_supply_chain,plot_farmer_group,source_file
+A1,S1,F1,Region,Dist,1,0,0,POINT(0 0),Yes,Yes,No,No,No,No,,Chain,Group,file1.csv
+A1,S1,F1,Region,Dist,1,0,0,POINT(0 0),Yes,Yes,No,No,No,No,,Chain,Group,file2.csv
+A2,S2,F2,Region2,Dist2,2,1,1,POINT(1 1),Yes,No,No,No,No,No,,Chain2,Group2,file3.csv
